@@ -30,7 +30,11 @@ def gen_cea(cea_input):
 
     assert "QALY" in cea_input.columns and "Cost" in cea_input.columns, \
         "CEA DataFrame must contain 'QALY' and 'Cost' columns."
-    cea_input.sort_values('Cost', inplace=True)
+
+    if 'SOC' in cea_input.index:
+        cea_input = pd.concat([cea_input.loc[['SOC']], cea_input.drop('SOC').sort_values('Cost')])
+    else:
+        cea_input.sort_values('Cost', inplace=True)
 
     cea_input['Delta_Cost'] = cea_input['Cost'].diff().fillna(cea_input['Cost'])
     cea_input['Delta_QALY'] = cea_input['QALY'].diff().fillna(cea_input['QALY'])
@@ -42,6 +46,6 @@ def gen_cea(cea_input):
 def plot_cea(cea_dict=None, cea_df=None):
     cea_df = gen_cea(cea_dict) if cea_dict else gen_cea(cea_df)
 
-    sns.lineplot(data=cea_df, x='QALY', y='Cost', marker='o')
+    sns.lineplot(data=cea_df, x='Cost', y='QALY', marker='o')
 
     return cea_df
