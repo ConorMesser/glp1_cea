@@ -258,7 +258,7 @@ def run_mc_sim_complex(base_transition_matrix, init_state, n_cycles, n_iter, sta
 def calculate_outcomes(markov_trace, cycle_length, treatment_type,
                        cost_suffix='', qaly_stage_suffix='', qaly_age_suffix='',
                        discount_rate=0.03, tx_cost_override=None, risk_attenuated_cycles=None,
-                       begin_tx_at_cycle=0, drug_stages=None):
+                       begin_tx_at_cycle=0, drug_stages=None, on_drug=None):
     stage_costs, age_costs, treatment_cost = load_costs(os.path.join(DIR_HRP, "cost_input.csv"),
                                                         col_suffix=cost_suffix,
                                                         treatment_type=treatment_type,
@@ -280,8 +280,13 @@ def calculate_outcomes(markov_trace, cycle_length, treatment_type,
         risk_attenuated_cycles = len(markov_trace) - begin_tx_at_cycle
     if drug_stages is None:
         drug_stages = alive_stages
-    on_drug = np.zeros(len(markov_trace))
-    on_drug[begin_tx_at_cycle:begin_tx_at_cycle+risk_attenuated_cycles] = markov_trace.iloc[begin_tx_at_cycle:begin_tx_at_cycle+risk_attenuated_cycles][drug_stages].sum(axis=1)
+
+    if on_drug is None:
+        on_drug = np.zeros(len(markov_trace))
+        on_drug[begin_tx_at_cycle:begin_tx_at_cycle+risk_attenuated_cycles] = markov_trace.iloc[begin_tx_at_cycle:begin_tx_at_cycle+risk_attenuated_cycles][drug_stages].sum(axis=1)
+    else:
+        # if given MC trace for drug status, get proportion on drug at each cycle
+        on_drug = on_drug.sum() / on_drug.shape[0]
     cost_vector += on_drug * cycle_tx_cost
 
     # QALYs (age-specific)
