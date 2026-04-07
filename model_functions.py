@@ -138,12 +138,20 @@ def gen_transition_probabilities(transition_matrix, age, mortality_path, risk_ma
 
 
 def run_markov_cohort(base_transition_matrix, init_state, n_cycles, cycle_length, starting_age=12,
-                      risk_matrix=None, risk_attenuated_cycles=None, risk_decreases=False, begin_tx_at_cycle=0):
+                      risk_matrix=None, risk_attenuated_cycles=None, risk_decreases=False, begin_tx_at_cycle=0,
+                      drug_stages=None):
     n_states = len(STAGE_ORDER)
     markov_trace = np.zeros((n_cycles + 1, n_states))
     markov_trace[0, :] = init_state
+
+    if drug_stages is not None:
+        for stage in STAGE_ORDER:
+            if stage not in drug_stages:
+                risk_matrix.loc[stage, :] = 1.0  # TODO
+
     for t in range(n_cycles):
         # modify risk matrix
+
         if (t < begin_tx_at_cycle or
                 (risk_attenuated_cycles is not None and t > begin_tx_at_cycle + risk_attenuated_cycles)):
             current_risk_matrix = None
@@ -196,7 +204,7 @@ def run_mc_sim(base_transition_matrix, init_state, n_cycles, n_iter, starting_ag
 def calculate_outcomes(markov_trace, cycle_length, treatment_type,
                        cost_suffix='', qaly_stage_suffix='', qaly_age_suffix='',
                        discount_rate=0.03, tx_cost_override=None, risk_attenuated_cycles=None,
-                       begin_tx_at_cycle=0):
+                       begin_tx_at_cycle=0, drug_stages=None):
     stage_costs, age_costs, treatment_cost = load_costs(os.path.join(DIR_HRP, "cost_input.csv"),
                                                         col_suffix=cost_suffix,
                                                         treatment_type=treatment_type,
@@ -208,15 +216,18 @@ def calculate_outcomes(markov_trace, cycle_length, treatment_type,
     cycle_tx_cost = treatment_cost * cycle_length
 
     # Cost is stage cost (matmul) + background age-related cost + treatment cost
+    alive_stages = list(set(STAGE_ORDER) - set(MORTALITY_COLUMNS))
     cost_vector = markov_trace.loc[:, STAGE_ORDER] @ stage_costs.loc[STAGE_ORDER].values * cycle_length
-    cost_vector += (1 - markov_trace.loc[:, MORTALITY_COLUMNS].sum(axis=1)) * age_costs.loc[markov_trace['age']].values * cycle_length
+    cost_vector += markov_trace.loc[:, alive_stages].sum(axis=1) * age_costs.loc[markov_trace['age']].values * cycle_length
 
     # only assume treatment for length of risk attenuation cycles (starting at begin_tx_at_cycle)
     # i.e. patient ceases treatment when efficacy wears off
     if risk_attenuated_cycles is None:
         risk_attenuated_cycles = len(markov_trace) - begin_tx_at_cycle
+    if drug_stages is None:
+        drug_stages = alive_stages
     on_drug = np.zeros(len(markov_trace))
-    on_drug[begin_tx_at_cycle:begin_tx_at_cycle+risk_attenuated_cycles] = (1 - markov_trace.iloc[begin_tx_at_cycle:begin_tx_at_cycle+risk_attenuated_cycles][MORTALITY_COLUMNS].sum(axis=1))
+    on_drug[begin_tx_at_cycle:begin_tx_at_cycle+risk_attenuated_cycles] = markov_trace.iloc[begin_tx_at_cycle:begin_tx_at_cycle+risk_attenuated_cycles][drug_stages].sum(axis=1)
     cost_vector += on_drug * cycle_tx_cost
 
     # QALYs (age-specific)
@@ -257,7 +268,7 @@ def run_single_model(tm_path, init_state, treatment_type,
                      rr=1, pr=1, n_cycles=None, starting_age=12, cycle_length=1/4,
                      transition_suffix='_obs',
                      risk_attenuated_cycles=None, risk_decreases=False, begin_tx_at_cycle=0,
-                     plot=True,
+                     plot=True, drug_stages=None,
                      **outcomes_kwargs):
 
     if n_cycles is None:
@@ -273,10 +284,11 @@ def run_single_model(tm_path, init_state, treatment_type,
     markov_trace = run_markov_cohort(transition_matrix, init_state, n_cycles, cycle_length,
                                      starting_age=starting_age, risk_matrix=risk_matrix,
                                      risk_attenuated_cycles=risk_attenuated_cycles, risk_decreases=risk_decreases,
-                                     begin_tx_at_cycle=begin_tx_at_cycle)
+                                     begin_tx_at_cycle=begin_tx_at_cycle, drug_stages=drug_stages)
     qaly_vector_discount, cost_vector_discount = calculate_outcomes(markov_trace, cycle_length, treatment_type,
                                                                     risk_attenuated_cycles=risk_attenuated_cycles,
                                                                     begin_tx_at_cycle=begin_tx_at_cycle,
+                                                                    drug_stages=drug_stages,
                                                                     **outcomes_kwargs)
     # Plot results
     if plot:
