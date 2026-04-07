@@ -200,6 +200,60 @@ def run_mc_sim(base_transition_matrix, init_state, n_cycles, n_iter, starting_ag
 
     return trace_df.T
 
+
+# TODO merge with above
+def run_mc_sim_complex(base_transition_matrix, init_state, n_cycles, n_iter, starting_age=12, cycle_length=1., risk_matrix=None, begin_tx_at_cycle=0, tx_cycle_num=None, drug_stages=None):
+    assert len(init_state) == len(STAGE_ORDER), "Initial state vector length must match number of states."
+    assert len(init_state) == len(base_transition_matrix), "Transition matrix size must match number of states."
+
+    if tx_cycle_num is None:
+        tx_cycle_num = n_cycles
+
+    markov_trace = np.zeros((n_iter, n_cycles + 1))
+    on_drug = np.zeros((n_iter, n_cycles + 1))
+
+    # keeping track of this assumes drug only has given efficacy over lifetime (two separate treatments of 36 months is similar to single tx of 72 months). Could change this to only track contiguous treatments.
+    num_drug_cycles = np.zeros(n_iter)
+    for i in range(n_iter):
+        starting_state = np.random.choice(len(init_state), p=init_state)
+        markov_trace[i, 0] = starting_state
+        for t in range(n_cycles):
+            age = starting_age + t * cycle_length
+
+            local_risk_matrix = risk_matrix.copy()
+            this_stage_idx = int(markov_trace[i, t])
+            this_stage = STAGE_ORDER[this_stage_idx]
+            # transform risk_matrix based on
+            # drug stages
+            local_on_drug = (((drug_stages is not None and this_stage in drug_stages) or
+                              (drug_stages is None)) and
+                             begin_tx_at_cycle <= t and
+                             num_drug_cycles[i] < tx_cycle_num)
+            if local_on_drug:
+                on_drug[i, t] = 1
+                num_drug_cycles[i] += 1
+            else:
+                local_risk_matrix = None
+
+            t_matrix = gen_transition_probabilities(base_transition_matrix.copy(), np.floor(age),
+                                                    os.path.join(DIR_HRP, "background_mortality.csv"),
+                                                    local_risk_matrix)
+            # print(t_matrix)
+            markov_trace[i, t + 1] = np.random.choice(len(init_state), p=t_matrix.iloc[int(markov_trace[i, t]), :].values)
+
+    trace_df = pd.DataFrame(markov_trace).T
+    trace_df['age_float'] = np.linspace(starting_age, starting_age + n_cycles * cycle_length, n_cycles + 1)
+    trace_df['age'] = np.floor(trace_df['age_float'])
+    trace_df.set_index(['age_float', 'age'], inplace=True)
+
+    on_drug_df = pd.DataFrame(on_drug).T
+    on_drug_df['age_float'] = np.linspace(starting_age, starting_age + n_cycles * cycle_length, n_cycles + 1)
+    on_drug_df['age'] = np.floor(on_drug_df['age_float'])
+    on_drug_df.set_index(['age_float', 'age'], inplace=True)
+
+    return trace_df.T, on_drug_df.T
+
+
 # TODO allow for more customizing cost and QALYs
 def calculate_outcomes(markov_trace, cycle_length, treatment_type,
                        cost_suffix='', qaly_stage_suffix='', qaly_age_suffix='',
