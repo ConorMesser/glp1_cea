@@ -11,7 +11,7 @@ STAGE_ORDER = ['F0', 'F1', 'F2', 'F3', 'F4', 'HCC', 'DC', 'LT', 'post-LT', 'Deat
 MORTALITY_COLUMNS = ['Death']
 # TODO split Death into liver-related, all-cause, cardiovascular?
 
-DIR_HRP = "~/Documents/courses/HRP_392/"
+DIR_HRP = "./" # TODO global variable
 
 # TODO make more flexible? Allow passing in qaly table vs calling from file?
 def load_costs(file_path, treatment_type='SOC', col_suffix='', tx_cost_override=None):
@@ -116,13 +116,11 @@ def load_transition_matrix(transition_path, col_suffix, cycle_length=1/4):
     return transition_matrix_cycle
 
 
-def gen_transition_probabilities(transition_matrix, age, mortality_path, risk_matrix=None):
+def gen_transition_probabilities(transition_matrix, age, overall_mortality, risk_matrix=None):
     """Generate transition probabilities for a given age and risk matrix."""
     if risk_matrix is not None:
         # multiply base transition matrix by risk matrix
         transition_matrix.update(transition_matrix * risk_matrix)
-
-    overall_mortality = pd.read_csv(mortality_path, index_col=0)
 
     # add in overall mortality
     transition_matrix.iloc[:-1, -1] = transition_matrix.iloc[:-1, -1] + overall_mortality.loc[
@@ -143,6 +141,8 @@ def run_markov_cohort(base_transition_matrix, init_state, n_cycles, cycle_length
     n_states = len(STAGE_ORDER)
     markov_trace = np.zeros((n_cycles + 1, n_states))
     markov_trace[0, :] = init_state
+
+    overall_mortality = pd.read_csv(os.path.join(DIR_HRP, "background_mortality.csv"), index_col=0)
 
     if drug_stages is not None:
         for stage in STAGE_ORDER:
@@ -165,7 +165,7 @@ def run_markov_cohort(base_transition_matrix, init_state, n_cycles, cycle_length
 
         age = starting_age + t * cycle_length
         t_matrix = gen_transition_probabilities(base_transition_matrix.copy(), np.floor(age),
-                                                os.path.join(DIR_HRP, "background_mortality.csv"),
+                                                overall_mortality,
                                                 current_risk_matrix)
 
         markov_trace[t + 1, :] = np.dot(markov_trace[t, :], t_matrix)
@@ -181,6 +181,8 @@ def run_mc_sim(base_transition_matrix, init_state, n_cycles, n_iter, starting_ag
     assert len(init_state) == len(STAGE_ORDER), "Initial state vector length must match number of states."
     assert len(init_state) == len(base_transition_matrix), "Transition matrix size must match number of states."
 
+    overall_mortality = pd.read_csv(os.path.join(DIR_HRP, "background_mortality.csv"), index_col=0)
+
     markov_trace = np.zeros((n_iter, n_cycles + 1))
     for i in range(n_iter):
         starting_state = np.random.choice(len(init_state), p=init_state)
@@ -188,7 +190,7 @@ def run_mc_sim(base_transition_matrix, init_state, n_cycles, n_iter, starting_ag
         for t in range(n_cycles):
             age = starting_age + t * cycle_length
             t_matrix = gen_transition_probabilities(base_transition_matrix.copy(), np.floor(age),
-                                                    os.path.join(DIR_HRP, "background_mortality.csv"),
+                                                    overall_mortality,
                                                     risk_matrix)
             # print(t_matrix)
             markov_trace[i, t + 1] = np.random.choice(len(init_state), p=t_matrix.iloc[int(markov_trace[i, t]), :].values)
@@ -212,6 +214,8 @@ def run_mc_sim_complex(base_transition_matrix, init_state, n_cycles, n_iter, sta
     markov_trace = np.zeros((n_iter, n_cycles + 1))
     on_drug = np.zeros((n_iter, n_cycles + 1))
 
+    overall_mortality = pd.read_csv(os.path.join(DIR_HRP, "background_mortality.csv"), index_col=0)
+
     # keeping track of this assumes drug only has given efficacy over lifetime (two separate treatments of 36 months is similar to single tx of 72 months). Could change this to only track contiguous treatments.
     num_drug_cycles = np.zeros(n_iter)
     for i in range(n_iter):
@@ -223,6 +227,10 @@ def run_mc_sim_complex(base_transition_matrix, init_state, n_cycles, n_iter, sta
             local_risk_matrix = risk_matrix.copy()
             this_stage_idx = int(markov_trace[i, t])
             this_stage = STAGE_ORDER[this_stage_idx]
+
+            if this_stage in MORTALITY_COLUMNS:
+                markov_trace[i, t + 1:] = this_stage_idx
+                break
             # transform risk_matrix based on
             # drug stages
             local_on_drug = (((drug_stages is not None and this_stage in drug_stages) or
@@ -236,7 +244,7 @@ def run_mc_sim_complex(base_transition_matrix, init_state, n_cycles, n_iter, sta
                 local_risk_matrix = None
 
             t_matrix = gen_transition_probabilities(base_transition_matrix.copy(), np.floor(age),
-                                                    os.path.join(DIR_HRP, "background_mortality.csv"),
+                                                    overall_mortality,
                                                     local_risk_matrix)
             # print(t_matrix)
             markov_trace[i, t + 1] = np.random.choice(len(init_state), p=t_matrix.iloc[int(markov_trace[i, t]), :].values)
@@ -286,14 +294,16 @@ def calculate_outcomes(markov_trace, cycle_length, treatment_type,
         on_drug[begin_tx_at_cycle:begin_tx_at_cycle+risk_attenuated_cycles] = markov_trace.iloc[begin_tx_at_cycle:begin_tx_at_cycle+risk_attenuated_cycles][drug_stages].sum(axis=1)
     else:
         # if given MC trace for drug status, get proportion on drug at each cycle
-        on_drug = on_drug.sum() / on_drug.shape[0]
+        on_drug = (on_drug.sum() / on_drug.shape[0]).values
     cost_vector += on_drug * cycle_tx_cost
 
     # QALYs (age-specific)
     qaly_vector = np.sum(markov_trace.loc[:, STAGE_ORDER] * combined_qalys.loc[markov_trace['age'], STAGE_ORDER].values, axis=1) * cycle_length
 
     # calculate life-years, QALYs, and costs
-    ly_ones_death_zero = np.concat([np.ones(len(STAGE_ORDER) - 1), [0]])
+    # ly_ones_death_zero = np.concat([np.ones(len(STAGE_ORDER) - 1), [0]])
+    ly_ones_death_zero = np.append(np.ones(len(STAGE_ORDER) - 1), 0)
+
     ly_vector = markov_trace.loc[:, STAGE_ORDER] @ ly_ones_death_zero * cycle_length
 
     # make half cycle correction
