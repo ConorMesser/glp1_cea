@@ -2,6 +2,8 @@ import pandas as pd
 import numpy as np
 import os
 import seaborn as sns
+import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 
 from utils import discount, prob_time_interval
 
@@ -116,15 +118,18 @@ def load_transition_matrix(transition_path, col_suffix, cycle_length=1/4):
     return transition_matrix_cycle
 
 
-def gen_transition_probabilities(transition_matrix, age, overall_mortality, risk_matrix=None):
+def gen_transition_probabilities(transition_matrix, age, overall_mortality, risk_matrix=None, cycle_length=1/4):
     """Generate transition probabilities for a given age and risk matrix."""
     if risk_matrix is not None:
         # multiply base transition matrix by risk matrix
         transition_matrix.update(transition_matrix * risk_matrix)
 
-    # add in overall mortality
-    transition_matrix.iloc[:-1, -1] = transition_matrix.iloc[:-1, -1] + overall_mortality.loc[
-        age, 'overall_mortality_avg']
+    # Convert annual overall mortality to the correct cycle probability
+    annual_mortality = overall_mortality.loc[age, 'overall_mortality_avg']
+    cycle_mortality = prob_time_interval(annual_mortality, intervals=1/cycle_length)
+
+    # Add in overall mortality
+    transition_matrix.iloc[:-1, -1] = transition_matrix.iloc[:-1, -1] + cycle_mortality
 
     # adjust LT -> post-LT transition based on new LT -> Death probability
     transition_matrix.loc['LT', 'post-LT'] = 1 - transition_matrix.loc['LT', 'Death']
@@ -166,7 +171,8 @@ def run_markov_cohort(base_transition_matrix, init_state, n_cycles, cycle_length
         age = starting_age + t * cycle_length
         t_matrix = gen_transition_probabilities(base_transition_matrix.copy(), np.floor(age),
                                                 overall_mortality,
-                                                current_risk_matrix)
+                                                current_risk_matrix,
+                                                cycle_length)
 
         markov_trace[t + 1, :] = np.dot(markov_trace[t, :], t_matrix)
 
@@ -191,7 +197,8 @@ def run_mc_sim(base_transition_matrix, init_state, n_cycles, n_iter, starting_ag
             age = starting_age + t * cycle_length
             t_matrix = gen_transition_probabilities(base_transition_matrix.copy(), np.floor(age),
                                                     overall_mortality,
-                                                    risk_matrix)
+                                                    risk_matrix,
+                                                    cycle_length)
             # print(t_matrix)
             markov_trace[i, t + 1] = np.random.choice(len(init_state), p=t_matrix.iloc[int(markov_trace[i, t]), :].values)
 
@@ -245,7 +252,8 @@ def run_mc_sim_complex(base_transition_matrix, init_state, n_cycles, n_iter, sta
 
             t_matrix = gen_transition_probabilities(base_transition_matrix.copy(), np.floor(age),
                                                     overall_mortality,
-                                                    local_risk_matrix)
+                                                    local_risk_matrix,
+                                                    cycle_length)
             # print(t_matrix)
             markov_trace[i, t + 1] = np.random.choice(len(init_state), p=t_matrix.iloc[int(markov_trace[i, t]), :].values)
 
@@ -329,16 +337,53 @@ def calculate_outcomes(markov_trace, cycle_length, treatment_type,
     return qaly_vector_discount, cost_vector_discount
 
 
-def plot_trace(markov_df):
-    sns.lineplot(data=markov_df.drop(columns='age').set_index('age_float').stack().reset_index(), x='age_float', y=0, hue='level_1')
+def plot_trace(markov_df, line_type=None, legend=True):
+
+    linestyle='solid' if line_type is None else line_type
+    
+    df = markov_df.drop(columns='age').set_index('age_float').stack().reset_index()
+    df = df.rename(columns={'age_float': 'Age', 0: 'Proportion', 'level_1': 'Stage'})
+    
+    ax = sns.lineplot(data=df, x='Age', y='Proportion', hue='Stage', linestyle=linestyle, legend=legend)
+
+    if line_type is not None and legend:
+        main_legend = ax.legend(title="Stage", loc="upper left",
+                               bbox_to_anchor=(1.02, 1))
+ 
+        # Create a dummy line artist with your specific line_type to act as the legend key
+        custom_line = Line2D([0], [0], color='black', linestyle='dotted')
+        custom_line2 = Line2D([0], [0], color='black', linestyle='solid')
+        custom_line3 = Line2D([0], [0], color='black', linestyle='dashed')
+        
+        # 3. Create the SECOND legend. 
+        # Note: This will temporarily remove main_legend from the plot.
+        # We assign it a different location (e.g., 'lower right') so they don't overlap.
+        scenario_legend = ax.legend(
+            handles=[custom_line, custom_line2, custom_line3], 
+            labels=["SOC", "18", "12"], 
+            title="Scenario", 
+            loc="upper left",
+            bbox_to_anchor=(1.02, 0.3)
+        )
+        
+        # 4. Re-add the first legend back to the plot
+        ax.add_artist(main_legend)
+
+        plt.tight_layout()
+
+        # Return the legends so we can pass them to savefig
+        return main_legend, scenario_legend
+    
+    return None, None # Fallback if no legends are drawn
 
 
 def run_single_model(tm_path, init_state, treatment_type,
                      rr=1, pr=1, n_cycles=None, starting_age=12, cycle_length=1/4,
                      transition_suffix='_obs',
                      risk_attenuated_cycles=None, risk_decreases=False, begin_tx_at_cycle=0,
-                     plot=True, drug_stages=None,
+                     plot=True, drug_stages=None, line_type=None, legend=True,
                      **outcomes_kwargs):
+    print(cycle_length)
 
     if n_cycles is None:
         n_cycles = int((100 - starting_age) / cycle_length)
@@ -361,7 +406,7 @@ def run_single_model(tm_path, init_state, treatment_type,
                                                                     **outcomes_kwargs)
     # Plot results
     if plot:
-        plot_trace(markov_trace)
+        plot_trace(markov_trace, legend=legend, line_type=line_type)
 
     return qaly_vector_discount.sum(), cost_vector_discount.sum(), markov_trace
 

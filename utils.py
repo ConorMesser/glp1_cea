@@ -24,7 +24,7 @@ def discount(value, time, rate=0.03):
     return value / ((1 + rate) ** time)
 
 
-def gen_cea(cea_input):
+def gen_cea(cea_input, sort_by='Cost'):
     if isinstance(cea_input, dict):
         cea_input = pd.DataFrame(cea_input).T
 
@@ -32,9 +32,9 @@ def gen_cea(cea_input):
         "CEA DataFrame must contain 'QALY' and 'Cost' columns."
 
     if 'SOC' in cea_input.index:
-        cea_input = pd.concat([cea_input.loc[['SOC']], cea_input.drop('SOC').sort_values('Cost')])
+        cea_input = pd.concat([cea_input.loc[['SOC']], cea_input.drop('SOC').sort_values(sort_by)])
     else:
-        cea_input.sort_values('Cost', inplace=True)
+        cea_input.sort_values(sort_by, inplace=True)
 
     cea_input['Delta_Cost'] = cea_input['Cost'].diff().fillna(cea_input['Cost'])
     cea_input['Delta_QALY'] = cea_input['QALY'].diff().fillna(cea_input['QALY'])
