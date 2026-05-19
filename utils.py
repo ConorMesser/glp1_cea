@@ -7,12 +7,12 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 
 
-def rate_to_prob(rate, time):
+def rate_to_prob(rate, time=1):
     """Gives probability of an event occurring over a specified time period."""
     return 1 - np.exp(-rate * time)
 
 
-def prob_to_rate(prob, time):
+def prob_to_rate(prob, time=1):
     """Provides number of events per unit time given probability."""
     return -np.log(1 - prob) / time
 
